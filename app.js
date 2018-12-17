@@ -12,7 +12,7 @@ const notificationUtils = require('./helpers/expoNotifications');
 const NOTIFICATION_EXPIRY = 5 * 24 * 3600;
 const LIMIT = 25;
 
-const sc2 = sdk.Initialize({ app: 'busy.app' });
+const sc2 = sdk.Initialize({ app: 'steemia.app' });
 
 const app = express();
 app.use(bodyParser.json());
@@ -21,9 +21,9 @@ app.use('/', router);
 const port = process.env.PORT || 4000;
 const server = app.listen(port, () => console.log(`Listening on ${port}`));
 
-const wss = new SocketServer({ server });
+const wss = new SocketServer({ noServer: true });
 
-const steemdWsUrl = 'wss://steemd.steemitdev.com';
+const steemdWsUrl = process.env.STEEMD_WS_URL || 'wss://gtg.steem.house:8090';
 const client = new Client(steemdWsUrl);
 
 const cache = {};
@@ -144,6 +144,8 @@ const getNotifications = ops => {
 };
 
 const loadBlock = blockNum => {
+  console.log(blockNum);
+  
   utils
     .getOpsInBlock(blockNum, false)
     .then(ops => {
@@ -232,49 +234,39 @@ const loadBlock = blockNum => {
     });
 };
 
-const loadNextBlock = () => {
-  redis
-    .getAsync('last_block_num')
-    .then(res => {
-      let nextBlockNum = res === null ? 20000000 : parseInt(res) + 1;
-      utils
-        .getGlobalProps()
-        .then(globalProps => {
-          const lastIrreversibleBlockNum = globalProps.last_irreversible_block_num;
-          if (lastIrreversibleBlockNum >= nextBlockNum) {
-            loadBlock(nextBlockNum);
-          } else {
-            utils.sleep(2000).then(() => {
-              console.log(
-                'Waiting to be on the lastIrreversibleBlockNum',
-                lastIrreversibleBlockNum,
-                'now nextBlockNum',
-                nextBlockNum,
-              );
-              loadNextBlock();
-            });
-          }
-        })
-        .catch(err => {
-          console.error('Call failed with lightrpc (getGlobalProps)', err);
-          utils.sleep(2000).then(() => {
-            console.log('Retry loadNextBlock', nextBlockNum);
-            loadNextBlock();
-          });
+const loadNextBlock = async () => {
+let lastIrreversibleBlockNum;
+  utils
+    .getGlobalProps()
+    .then(globalProps => {
+      //console.log(globalProps);
+      lastIrreversibleBlockNum = globalProps.last_irreversible_block_num;
+      if (lastIrreversibleBlockNum) {
+        loadBlock(lastIrreversibleBlockNum);
+      } else {
+        utils.sleep(2000).then(() => {
+          console.log(
+            'Waiting to be on the lastIrreversibleBlockNum',
+            lastIrreversibleBlockNum,
+            'now nextBlockNum',
+            lastIrreversibleBlockNum,
+          );
+          loadNextBlock();
         });
+      }
     })
     .catch(err => {
-      console.error('Redis get last_block_num failed', err);
+      console.error('Call failed with lightrpc (getGlobalProps)', err);
+      utils.sleep(2000).then(() => {
+        console.log('Retry loadNextBlock', lastIrreversibleBlockNum);
+        loadNextBlock();
+      });
     });
 };
 
-const start = async () => {
+const start = () => {
   console.info('Start streaming blockchain');
-  const globalProps = await utils.getGlobalProps();
-  console.log(globalProps);
-  
-  //loadBlock(globalProps.last_irreversible_block_num);
-  loadBlock(globalProps.head_block_number);
+  loadNextBlock();
 
   /** Send heartbeat to peers */
   setInterval(() => {
